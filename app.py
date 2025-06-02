@@ -5,7 +5,7 @@ import os
 import fitz  # PyMuPDF
 
 # Load API Key
-GROQ_API_KEY = st.secrets["Ggsk_iAcFj6Mi6UsWViGEsQN7WGdyb3FYBzDAcD626sVDgmNhEbUD1G2a"]
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 
 # PDF Extractor
