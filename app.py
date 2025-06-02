@@ -19,7 +19,7 @@ def extract_text_from_pdf(pdf_file):
 
 # App UI
 st.set_page_config(page_title="Chatbot using Groq", page_icon="🧠")
-st.markdown("<h1 style='text-align: center;'>🤖 Groq Chatbot by Parth</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>🤖 Groq Chatbot by Viraj</h1>", unsafe_allow_html=True)
 st.markdown("<hr style='margin-top: 10px; margin-bottom: 20px;'>", unsafe_allow_html=True)
 
 st.markdown("""
