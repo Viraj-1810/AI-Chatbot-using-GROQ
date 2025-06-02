@@ -8,6 +8,7 @@ import fitz  # PyMuPDF
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 
+
 # PDF Extractor
 def extract_text_from_pdf(pdf_file):
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
