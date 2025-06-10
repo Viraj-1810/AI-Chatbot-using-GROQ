@@ -1,6 +1,6 @@
 streamlit
+PyMuPDF
 requests
-pymupdf
 langchain
-faiss-cpu
+chromadb
 sentence-transformers
