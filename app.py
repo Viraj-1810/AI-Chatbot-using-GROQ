@@ -1,79 +1,94 @@
 import streamlit as st
 import fitz  # PyMuPDF
-from langchain_chroma import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 import requests
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from sentence_transformers import SentenceTransformer, util
 
 # Load API key
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
-def extract_text_from_pdf(file):
+# Initialize embedding model
+@st.cache_resource
+def get_embedding_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+# Extract text from PDF
+def extract_text(file):
     doc = fitz.open(stream=file.read(), filetype="pdf")
-    return "".join(page.get_text() for page in doc)
+    return "\n".join(page.get_text() for page in doc)
 
-def create_vector_store(text):
+# Chunk text into documents
+def chunk_text(text):
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    docs = splitter.create_documents([text])
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vectorstore = Chroma.from_documents(docs, embedding=embeddings, persist_directory="./chroma_store")
-    return vectorstore
+    return splitter.create_documents([text])
 
-def get_relevant_context(vectorstore, query, k=4):
-    docs = vectorstore.similarity_search(query, k=k)
-    return "\n\n".join(doc.page_content for doc in docs)
+# Compute embeddings for chunks
+@st.cache_resource
+def embed_chunks(chunks):
+    model = get_embedding_model()
+    texts = [doc.page_content for doc in chunks]
+    embeddings = model.encode(texts, convert_to_tensor=True)
+    return embeddings
 
-st.set_page_config(page_title="Groq PDF Chatbot", page_icon="📄")
-st.markdown("<h1 style='text-align: center;'>📄 Chat with PDF using GROQ</h1>", unsafe_allow_html=True)
-st.markdown("<hr>", unsafe_allow_html=True)
+# Retrieve context via cosine similarity
+def get_context(chunks, embeddings, question, top_k=4):
+    model = get_embedding_model()
+    q_embed = model.encode(question, convert_to_tensor=True)
+    cos_scores = util.semantic_search(q_embed, embeddings, top_k=top_k)[0]
+    selected = [chunks[hit["corpus_id"]].page_content for hit in cos_scores]
+    return "\n\n".join(selected)
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Streamlit UI
+st.set_page_config(page_title="Groq PDF Chatbot", page_icon="🔍")
+st.title("🔍 Chat with PDF via GROQ")
 
-st.sidebar.header("📎 Upload a PDF")
-pdf_file = st.sidebar.file_uploader("Choose a PDF file", type="pdf")
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-vectorstore = None
-if pdf_file:
-    pdf_text = extract_text_from_pdf(pdf_file)
-    vectorstore = create_vector_store(pdf_text)
-    st.sidebar.success("✅ PDF successfully processed!")
+uploaded = st.sidebar.file_uploader("Upload PDF", type="pdf")
+chunks = embeddings = None
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+if uploaded:
+    text = extract_text(uploaded)
+    chunks = chunk_text(text)
+    embeddings = embed_chunks(chunks)
+    st.sidebar.success("✅ PDF ready!")
 
-user_input = st.chat_input("Ask something about your PDF...")
+for msg in st.session_state.history:
+    st.chat_message(msg["role"]).markdown(msg["content"])
 
-if user_input and vectorstore:
-    st.chat_message("user").markdown(user_input)
-    st.session_state.messages.append({"role": "user", "content": user_input})
+prompt = st.chat_input("Ask anything about the PDF...")
 
-    context = get_relevant_context(vectorstore, user_input)
+if prompt:
+    st.chat_message("user").markdown(prompt)
+    st.session_state.history.append({"role": "user", "content": prompt})
 
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    if chunks and embeddings is not None:
+        context = get_context(chunks, embeddings, prompt)
+    else:
+        context = ""
+
     body = {
         "model": "llama3-8b-8192",
         "messages": [
-            {"role": "system", "content": f"Use the following PDF context to answer:\n\n{context}"},
-            {"role": "user", "content": user_input}
+            {"role": "system", "content": f"Use this context:\n\n{context}"},
+            {"role": "user", "content": prompt}
         ]
     }
+    resp = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        json=body
+    )
 
-    response = requests.post("https://api.groq.com/openai/v1/chat/completions",
-                             headers=headers, json=body)
-
-    if response.status_code == 200:
-        answer = response.json()["choices"][0]["message"]["content"]
-        st.chat_message("assistant").markdown(answer)
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+    if resp.status_code == 200:
+        reply = resp.json()["choices"][0]["message"]["content"]
+        st.chat_message("assistant").markdown(reply)
+        st.session_state.history.append({"role": "assistant", "content": reply})
     else:
-        st.error("❌ Error from Groq API")
-        st.code(response.text, language="json")
+        st.error("❌ GROQ API error.")
+        st.code(resp.text, language="json")
 
 if st.sidebar.button("🧹 Clear Chat"):
-    st.session_state.messages.clear()
+    st.session_state.history.clear()
     st.experimental_rerun()
