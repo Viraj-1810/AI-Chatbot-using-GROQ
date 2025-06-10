@@ -2,17 +2,16 @@ import streamlit as st
 import requests
 import os
 import fitz  # PyMuPDF
-from sentence_transformers import SentenceTransformer, util
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.schema import Document
+from sentence_transformers import SentenceTransformer
+from langchain.embeddings import HuggingFaceEmbeddings
 
 # Load API Key
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
-# Embedder
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Load model with CPU explicitly to avoid GPU errors on Streamlit Cloud
+model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
-# Function to extract text from PDF
+# PDF Extractor
 def extract_text_from_pdf(pdf_file):
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
@@ -20,54 +19,34 @@ def extract_text_from_pdf(pdf_file):
         text += page.get_text()
     return text
 
-# Split text into chunks
-def split_text(text):
-    splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=500,
-        chunk_overlap=50,
-        length_function=len
-    )
-    chunks = splitter.create_documents([text])
-    return chunks
+# Embed chunks
+def embed_chunks(chunks):
+    return model.encode(chunks, convert_to_tensor=False)
 
-# Embed chunks - Only accept list of strings (hashable)
-@st.cache_resource
-def embed_text_chunks(text_list):
-    return model.encode(text_list, convert_to_tensor=True)
-
-# Get top-k similar chunks
-def get_similar_chunks(query, text_list, embeddings, top_k=3):
-    query_embedding = model.encode(query, convert_to_tensor=True)
-    hits = util.semantic_search(query_embedding, embeddings, top_k=top_k)[0]
-    return [text_list[hit["corpus_id"]] for hit in hits]
-
-# Streamlit App UI
+# App UI
 st.set_page_config(page_title="Chatbot using Groq", page_icon="🧠")
 st.markdown("<h1 style='text-align: center;'>🤖 Groq Chatbot by Viraj</h1>", unsafe_allow_html=True)
 st.markdown("<hr style='margin-top: 10px; margin-bottom: 20px;'>", unsafe_allow_html=True)
 
-# Session state for chat messages
+# Session State
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# PDF Upload Sidebar
+# Sidebar PDF Upload
 st.sidebar.header("📎 Upload a PDF to Chat With It")
 uploaded_pdf = st.sidebar.file_uploader("Upload PDF", type="pdf")
 
 pdf_text = ""
-chunks = []
-text_list = []
-embeddings = None
-
 if uploaded_pdf:
     pdf_text = extract_text_from_pdf(uploaded_pdf)
-    chunks = split_text(pdf_text)
-    text_list = [chunk.page_content for chunk in chunks]  # ✅ Extract only text
-    embeddings = embed_text_chunks(text_list)
-    st.sidebar.success("✅ PDF uploaded and processed!")
+    st.sidebar.success("✅ PDF uploaded successfully!")
+    if not any(msg["role"] == "system" for msg in st.session_state.messages):
+        st.session_state.messages.insert(0, {
+            "role": "system",
+            "content": f"Use this PDF content to answer queries:\n\n{pdf_text[:3000]}"
+        })
 
-# Display previous messages
+# Display Chat Messages
 for msg in st.session_state.messages:
     if msg["role"] == "user":
         st.markdown(
@@ -80,24 +59,13 @@ for msg in st.session_state.messages:
             unsafe_allow_html=True
         )
 
-# Chat input
+# Chat Input
 prompt = st.chat_input("Ask me anything!")
 
 if prompt:
-    # Save user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").markdown(prompt)
 
-    # If PDF is uploaded and embeddings are available, enhance context
-    if uploaded_pdf and embeddings is not None:
-        similar_chunks = get_similar_chunks(prompt, text_list, embeddings)
-        context = "\n\n".join(similar_chunks)
-        st.session_state.messages.insert(0, {
-            "role": "system",
-            "content": f"Use this PDF content to answer queries:\n\n{context}"
-        })
-
-    # Make API call to Groq
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
@@ -119,4 +87,4 @@ if prompt:
         st.session_state.messages.append({"role": "assistant", "content": reply})
         st.chat_message("assistant").markdown(reply)
     else:
-        st.error("❌ API Error: " + response.text)
+        st.code(response.text, language="json")
