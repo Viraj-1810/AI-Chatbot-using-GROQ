@@ -2,5 +2,6 @@ streamlit
 PyMuPDF
 requests
 langchain
+langchain-chroma
 chromadb
 sentence-transformers
